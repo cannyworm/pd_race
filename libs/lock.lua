@@ -8,7 +8,7 @@ end
 
 function Locks:new(o)
     o = o or {}
-    o.locks = []
+    o.locks = {}
     setmetatable(o, self)
     self.__index = self
     return o
