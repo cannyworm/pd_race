@@ -6,6 +6,7 @@ function get_fn_sig()
     return debug.getinfo(3,"f").func
 end
 
+Locks = {}
 function Locks:new(o)
     o = o or {}
     o.locks = {}

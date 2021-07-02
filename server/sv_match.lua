@@ -23,7 +23,7 @@ function Match:new( host  , name , password , max_player ,  max_laps )
         },
 
         max_player = max_player,
-        playerlist = []
+        playerlist = {}
     }
 
     setmetatable(o, self)
