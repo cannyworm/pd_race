@@ -10,10 +10,11 @@ local _fn = _C.Finishline
 
 CRace = {}
 
-function CRace:new(object)
+function CRace:new(object,shared)
 
     object = object or {}
 
+    object.shared = shared
     object.id = nil -- match id lol
     object.rmk = RouteMaker:new()
     
@@ -70,12 +71,17 @@ function CRace:UpdateCheckpoint()
     local localpl = self:GetLocalPlayer()
 
     local coords , next_coords = self:GetCheckpointCoords(localpl.checkpoint+1)
+    if coords == nil then
+        return
+    end
+    if next_coords == nil then
+        next_coords = coords
+    end
     if localpl.checkpoint + 1 > #self.route.checkpoints and localpl.laps == self.max_laps - 1 then
         self.show_finishline = true
-        self.target_checkpoint = AddCheckpoint(_fn.Type,0,coords, next_coords,_fn.Size,_fn.Color.r,_fn.Color.g,_fn.Color.b,_fn.Color.a)
+        self.target_checkpoint = AddCheckpoint(_fn.Type,0, coords, next_coords,_fn.Size,_fn.Color.r,_fn.Color.g,_fn.Color.b,_fn.Color.a)
         SetCheckpointCylinderHeight(self.target_checkpoint,_fn.Height,_fn.Height,_fn.Size)
     else
-        
         self.target_checkpoint = AddCheckpoint(_cp.Type,0,coords, next_coords,_cp.Size,_cp.Color.r,_cp.Color.g,_cp.Color.b,_cp.Color.a)
         SetCheckpointCylinderHeight(self.target_checkpoint,_cp.Height,_cp.Height,_cp.Size)
     end        
@@ -89,14 +95,15 @@ function CRace:ClearCheckpoint()
 end
 
 function CRace:UpdateBlips()
+
     local localpl = self:GetLocalPlayer()
     local coords , next_coords = self:GetCheckpointCoords(localpl.checkpoint+1)
     
     if self.big_blip == nil then
-        self.big_blip = AddBlip(coords,1,5,255,nil,1.0)
+        self.big_blip = AddBlip(coords,1,5,255,nil,1.2)
     end
 
-    if self.small_blip == nil then
+    if self.small_blip == nil and next_coords ~= nil then
         self.small_blip = AddBlip(next_coords,1,5,190,nil,0.8)
         SetBlipAsShortRange(self.small_blip, true)
     end
@@ -121,13 +128,26 @@ function CRace:ClearBlips()
 end
 
 function CRace:Clear()
+    SetVehicleBurnout(self.local_veh, false)
+    
     self:StopTimer()
     self:ClearCheckpoint()
     self:ClearBlips()
-    Citizen.Wait(500)
 
-    self.running = nil
-    self.started = nil
+    self.countdown_scalfrom:unload()
+    
+
+    Citizen.CreateThread(function()
+        while self.big_message.rendering == true do
+            Citizen.Wait(10)
+        end
+        self.big_message:unload()
+    end)
+
+    Citizen.Wait(500)
+    
+    self.running = false
+    self.started = false
     
     self.route = nil
     self.server_id = nil
@@ -138,7 +158,7 @@ function CRace:Clear()
     
     self.small_blip = nil -- for next target
     self.big_blip = nil -- for current target
-
+    self.local_ent = nil
 end
 
 
@@ -153,7 +173,7 @@ function CRace:LoadSVRace(sv)
     
     self.playerlist  = sv.playerlist
     self.localplayer = desk.find( self.playerlist , function (v , k) return v.id == self.server_id end)
-
+    
     for k , v in ipairs(self.playerlist) do
         v.ent = GetPlayerPed(GetPlayerFromServerId(v.id))
         v.veh = GetVehiclePedIsIn(v.ent,false)
@@ -168,28 +188,26 @@ end
 
 function CRace:UpadtePlayer(keys , data)    
     local player = desk.find( self.playerlist , function (v , k) return v.id == data.id end)
-
-    if keys[1] == 'checkpoint' then
+    local target = keys:pop()
+    if target == 'checkpoint' then
         player.checkpoint = data.value
         if data.id == self.server_id then
             self:UpdateCheckpoint()
             self:UpdateBlips()
             PlaySoundFrontend(-1, "RACE_PLACED", "HUD_AWARDS")
         end
-    elseif keys[1] == 'laps' then
+    elseif target == 'laps' then
         player.laps = data.value
-    elseif keys[1] == 'finish' then
+    elseif target == 'finish' then
         player.finish = true
-        
         if data.id == self.server_id then
             AnimpostfxPlay("MinigameEndNeutral", 0, 0)
             PlaySoundFrontend(-1, "SCREEN_FLASH", "CELEBRATION_SOUNDSET")
             self:MpMessageShow(data.place .. ' place', GetTimeAsString(GetNetworkTime() - self.start_time),5000)
             self:Clear()
+            
         end
-    
     end
-
 
 end
 
@@ -198,50 +216,43 @@ function CRace:NetUpdate( keys , data)
 end
 
 function CRace:Init()
+
     self.big_message = scaleform:new('mp_big_message_freemode',true)
     self.countdown_scalfrom = scaleform:new('countdown',true)
+    self.local_ent = GetPlayerPed(-1)
+    self.local_veh =  GetVehiclePedIsIn(self.local_ent,false)
     
     self:NetUpdate({'player' , 'ready'})
 end
 
+function CRace:GetPos()
+    local pos = 1
+    local localpl = self:GetLocalPlayer()
+    for k , v in ipairs(self.playerlist) do
+        
+        if v.id ~= self.server_id then
+            
+            if v.checkpoint > localpl.checkpoint then
+                pos = pos + 1
+            elseif v.checkpoint == localpl.checkpoint then
+                local cpcoords , next = self:GetCheckpointCoords(v.checkpoint) 
+                if #(next - GetEntityCoords(v.ent)) > #(next -  GetEntityCoords(localpl.ent)) then
+                    pos = pos + 1
+                end
+            end
+            
+        end 
+    end
+    return pos
+end
 
 function CRace:Start() -- only get called from server because fuck client
     self.running = true
-
-    Citizen.CreateThread(function() -- main thread
-
-        self.countdown_scalfrom:start_render()
-        self:UpdateCheckpoint()
-        self:UpdateBlips()
-        
-        SetVehicleBurnout(self:GetLocalPlayer().veh, true)
-        
-        while self.running == true do
-            Citizen.Wait(0)
-        
-            if self.started == true then    
-                self.pos = 1
-                local localpl = self:GetLocalPlayer()
-                for k , v in ipairs(self.playerlist) do
-                    
-                    if v.id ~= self.server_id then
-                        
-                        if v.checkpoint > localpl.checkpoint then
-                            self.pos = self.pos + 1
-                        elseif v.checkpoint == localpl.checkpoint then
-                            local cpcoords , next = self:GetCheckpointCoords(v.checkpoint) 
-                            if #(next - GetEntityCoords(v.ent)) > #(next -  GetEntityCoords(localpl.ent)) then
-                                self.pos = self.pos + 1
-                            end
-                        end
-
-                    end 
-
-                end
-            end
-
-        end
-    end)
+    self.countdown_scalfrom:start_render()
+    self:UpdateCheckpoint()
+    self:UpdateBlips()
+    
+    SetVehicleBurnout(self:GetLocalPlayer().veh, true)
 end
 
 function CRace:MpMessageShow(message, subtitle, ms) 
@@ -267,7 +278,7 @@ function CRace:StartTimer()
             if localpl == nil or self.route == nil then return end
 
             DrawTextBar('Checkpoints' , string.format('%d/%d',localpl.checkpoint,#self.route.checkpoints ),4)
-            DrawTextBar('Pos' , string.format('%d/%d',self.pos,#self.playerlist),3)
+            DrawTextBar('Pos' , string.format('%d/%d',self:GetPos(),#self.playerlist),3)
             DrawTextBar('Lap' , string.format('%d/%d',localpl.laps+1,self.max_laps) ,2)
             DrawTimerBar('Time',(cur_time - self.start_time),1)
         end
@@ -278,49 +289,38 @@ function CRace:StopTimer()
     self.draw_timer = false
 end
 
-Race = nil
-
-AddEventHandler('pd_race:cl_net_update' , function(target , keys , data)
+function CRace:NetHandle( keys , data)
+    local target = keys:pop()
     
-    if target == 'race' then
-        
-        print('[race]', json.encode(keys) , json.encode(data))
-
-        if keys[1] == 'initialize' then
-            Race = nil
-            Race = CRace:new()
-            Race:LoadSVRace(data.race)
-            Race:Init()
-        elseif keys[1] == 'cleanup' then
-            Race = nil
-        elseif keys[1] == 'start' then
-            Race.started = true
-            Race:Start()
-        elseif keys[1] == 'countdown' then
-            Race:CountdownShow(data.max - data.value,0,0,0)
-            
-        elseif keys[1] == 'go' then
-            SetVehicleBurnout(Race:GetLocalPlayer().veh, false)
-
-            Race:CountdownShow('GO',0,255,0)
-            Race:StartTimer()
-
-        elseif keys[1] == 'player' then
-
-            if Race:UpadtePlayer( {table.unpack(keys,2)} , data) == false then
-                print('[race] self:UpadtePlayer return false')
-            end
-
-        elseif keys[1] == 'playerlist' then
-            -- call once before 
-            if keys[2] == 'init' then
-                Race.playerlist = data.race.playerlist
-            end
-            
+    if target == 'init' or  target == 'start' or target == 'go' or target == 'start'  or target == 'countdown'  then
+        if self.shared == true then
+            target = 0
         end
     end
 
-end)
+    if target == 'init' then
+        self:LoadSVRace(data.race)
+        self:Init()
+    elseif target == 'start' then
+        self:Start()
+    elseif target == 'countdown' then
+        self:CountdownShow(data.max - data.value,0,0,0)
 
+    elseif target == 'go' then
+        self.started = true
+        SetVehicleBurnout(self:GetLocalPlayer().veh, false)
+        self:CountdownShow('GO',0,255,0)
+        self:StartTimer()
+        
+    elseif target == 'player' then
+        if self:UpadtePlayer( keys , data) == false then
+            print('[race] self:UpadtePlayer return false')
+        end
+    elseif target == 0 then
 
+    else
+        return false
+    end
 
+    return true
+end

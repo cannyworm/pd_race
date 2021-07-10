@@ -32,6 +32,7 @@ function SRace:new(object)
 end
 
 function SRace:Clear()
+    self.stop = true
     self.playerlist = {}
     self.finish_count = 0
 end
@@ -50,9 +51,15 @@ end
 
 
 function SRace:AddPlayer(player)
+    
+    if desk.find(self.playerlist , function(v) return v.id == player end) ~= nil then 
+        return false
+    end
+
     table.insert(self.playerlist,#self.playerlist+1,{
         id = player, -- player indentify
         ent = GetPlayerPed(player),
+        veh = GetVehiclePedIsIn(GetPlayerPed(player),false),
         checkpoint = 0, -- start at 0 because lua start index at 1
         laps = 0, -- current laps
         finish = false, -- finish this race
@@ -64,6 +71,28 @@ function SRace:AddPlayer(player)
         ]] 
     })
 end
+
+function SRace:AddPlayers(playerlist)
+    for k , v in ipairs(playerlist) do
+        self:AddPlayer(v.id)
+    end
+end
+
+function SRace:RemovePlayer(player , option)
+    local v , k = desk.find(self.playerlist , function(v) return v.id == player end)
+    if v == nil then 
+        return false
+    end
+    
+    if option.RemoveCar == true then
+        if DoesEntityExist(v.veh) then
+            DeleteVehicle(v.veh)
+        end
+    end
+
+    table.remove(self.playerlist,k)
+end
+
 
 -- SRace:Update~ will return true if player need update
 function SRace:UpdatePlayerCheckpoint(v)
@@ -99,7 +128,7 @@ end
 
 
 function SRace:NetClientUpdate(client , keys , data)
-    TriggerClientEvent('pd_race:cl_net_update', client , 'race' , keys , data)
+    TriggerClientEvent('pd_race:cl_net_update', client , 'match' , {'race' , table.unpack(keys) } , data)
 end
 
 function SRace:NetAllClientUpdate( keys , data)
@@ -115,7 +144,8 @@ end
 
 function SRace:UpdatePlayer()
     for i , v in ipairs(self.playerlist) do
-        if v.finish == false then 
+
+        if v.finish == false  then 
         
             if self:UpdatePlayerCheckpoint(v) then
 
@@ -125,17 +155,17 @@ function SRace:UpdatePlayer()
                     if v.laps >= self.max_laps then 
                         self.finish_count = self.finish_count + 1
                         v.finish = true
-                        self:NetAllClientUpdate( {'player' , 'finish'}  , { id = v.id , place = self.finish_count  }) -- win
-                        
-                        SetVehicleDoorsLocked(v.veh , 0)
-                        
+                        self:NetAllClientUpdate( {'player' , 'finish'}  , { id = v.id , place = self.finish_count  }) -- win                
+                        SetVehicleDoorsLocked(v.veh , 6)
+        
                     else 
                         v.checkpoint = 0 -- reset checkpoint
                         self:NetAllClientUpdate({'player' ,  'laps' }, { id = v.id , value = v.laps })
                     end  
                 end
-
-                self:NetAllClientUpdate({'player','checkpoint'}  , { id = v.id , value = v.checkpoint })
+                if v.checkpoint <= #self.route.checkpoints  then
+                    self:NetAllClientUpdate({'player','checkpoint'}  , { id = v.id , value = v.checkpoint })
+                end
             end
         
         end
@@ -148,7 +178,7 @@ function SRace:SetPos()
         local pos = self.route.cars[i].Pos
         local heading = self.route.cars[i].Heading
         if v.veh ~= nil then
-            SetVehicleDoorsLocked(v.veh , 10)
+            SetVehicleDoorsLocked(v.veh,6)
             SetEntityCoords(v.veh,pos.x,pos.y,pos.z,true,false,false)
             SetEntityHeading(v.veh,heading)
         end
@@ -156,16 +186,15 @@ function SRace:SetPos()
 end
 
 function SRace:Start()
-    
-    self:NetAllClientUpdate( {'initialize'} , { race = self} ) -- start Initialize CRace         
-    
     for i , v in ipairs(self.playerlist) do
         v.veh = GetVehiclePedIsIn(v.ent,false)
     end
 
+    self:NetAllClientUpdate( {'init'} , { race = self} ) -- start Initialize CRace         
+    
+    -- anti cheat ?
 
     self:SetPos()
-    Citizen.Wait(1000)
     self:Run()
 end
 
@@ -178,8 +207,8 @@ function SRace:Run()
                 self:UpdatePlayer()
 
                 if self:ShoulStop() == true then
-                    self:Clear()
                     self:NetAllClientUpdate( {'cleanup'} )
+                    self:Clear()
                     self.running = false
                     self.finish = true
                     return
@@ -196,6 +225,10 @@ function SRace:SetId(id)
 end
 
 function SRace:ShoulStop()
+    if self.stop == true then
+        self.stop = false
+        return true
+    end
     for i , v in ipairs(self.playerlist) do
         if v.finish == false then
             return false
@@ -220,7 +253,6 @@ function SRace:StartCountdown()
                 countdown = countdown + 1
                 
                 if countdown == self.countdown then
-                    self:NetAllClientUpdate({'go'})
                     break
                 end
 
@@ -231,7 +263,8 @@ function SRace:StartCountdown()
        
         end
 
-        self:SetPos()
+        -- anti cheat
+        -- self:SetPos()
         self.started = true
         self:NetAllClientUpdate({'go'})
 
@@ -241,15 +274,14 @@ end
 
 -- return false if id didn't exits
 function SRace:NetPlayerUpdate(source , keys , data)
-    local pl_id = source
-    local v , pl_key = desk.find( self.playerlist , function (v , k) 
-        return v.id == pl_id 
+    local player  = desk.find( self.playerlist , function (v , k) 
+        return v.id == source 
     end)
+    local target = keys:pop()
+    if target == 'ready' then -- client finish initialize CRace
+        if player.status == self.estatus.ready then return true end
 
-    if keys[1] == 'ready' then -- client finish initialize CRace
-        if v.status == self.estatus.ready then return false end
-
-        v.status = self.estatus.ready
+        player.status = self.estatus.ready
         
         for _ , pl in ipairs(self.playerlist) do
             if pl.status ~= self.estatus.ready then
@@ -262,18 +294,19 @@ function SRace:NetPlayerUpdate(source , keys , data)
     else
         return false
     end
+
     return true
 end
 
 
-function SRace:net_update( source , keys , data)
-    if keys[1] == 'player' then
-        if self:NetPlayerUpdate(source , { table.unpack(keys,2)  }, data) == false then
-            print(string.format('SRace:NetPlayerUpdate(%d,%s,%s) return false',source,json.encode(keys),json.encode(data)))
+function SRace:NetHandle( src , keys , data)
+    local target = keys:pop()
+    if target == 'player' then
+        if self:NetPlayerUpdate(src , keys , data) == false then
+            -- TODO error handling : invalid player
         end
     else
-        return false
+        -- TODO error handling : invalid target
     end
-    return true
 end
 

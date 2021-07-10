@@ -1,26 +1,35 @@
--- error handleing (register error callback when call function and check the result of error)
--- becare full about multithread
--- make callback system
-
+-- server doesn't know what match we are in
+-- check file netcode
 
 CMatch = {}
 Matchlist = {}
 
-function CMatch:new(object)
+function CMatch:new(object,shared)
+    
     object = object or {}
+    object.shared = shared
+    object.race = CRace:new({},object)
 
     setmetatable(object, self)
     self.__index = self
     return object
 end
 
+
+function CMatch:SetRoute( route )
+    self.route = route
+end
+
+function CMatch:Clear()
+    self.race:Clear()
+end
+
 function CMatch:NetUpdate( keys , data)
     sv_net_update('match' , { self.id , table.unpack(keys) } , data)
 end
 
-function CMatch:NetCreate( custom_id , name , password , route_id , use_finishline , max_players , max_laps )
+function CMatch:NetCreate(name , password , route_id , use_finishline , max_players , max_laps )
     sv_net_update('matchlist',{'create'}, {
-         custom_id = custom_id, 
          name = name,
          password = password , 
          route_id = route_id, 
@@ -41,166 +50,149 @@ function CMatch:NetLeave( )
     sv_net_update('matchlist',{'leave'})
 end
 
-
-function CMatch:SetRoute( route )
-    self.route = route
+function CMatch:NetSetRouteById( route_Id )
+    self:NetUpdate({'update' , 'route'} , {value = route_Id})
 end
 
--- init CRace
-function CMatch:RaceInit()
-    self.race = CRace:new()
-    self.race:SetRoute(self.route)
-    self.race:Init()
+function CMatch:NetSetName( Name )
+    self:NetUpdate({'update' , 'name'} , {value = Name})
+end
+
+function CMatch:NetSetUseFinishline( use_finishline )
+    self:NetUpdate({'update' , 'use_finishline'} , {value = use_finishline})
 end
 
 -- tell server that we are ready
-function CMatch:SetReady(ready)
-    self.ready = ready
+function CMatch:NetSetReady(ready)
     self:NetUpdate({'player','ready'},{ready = ready})
+
 end
 
-function CMatch:Start()
+function CMatch:NetStart()
     self:NetUpdate({'start'})
 end
 
 function CMatch:NetUpdatePlayer( keys , data)
+    
     local pl = desk.find(self.playerlist , function(v) return v.id == data.id end)
-
     if pl == nil then
         return false
     end
 
-    if keys[1] == 'ready' then
-        if data.ready == true then
-            pl.ready = true
-        else
-            pl.ready = false
+    local prop = keys:pop()
+    if prop == 'ready' then
+        pl.ready = data.ready == true
+        if data.id == GetPlayerServerId(GetPlayerIndex()) then
+            self.ready = pl.ready
+        end
+
+    end
+
+end
+
+function CMatch:AddPlayer( player )
+    local pl = desk.insert_end(self.playerlist, {
+        id = player
+    })
+end
+
+function CMatch:RemovePlayer( player )
+    local pl , k = desk.find( self.playerlist , function (v) return v.id == player end)
+
+    if pl ~= nil then
+        table.remove(self.playerlist , k)
+
+        if self.race ~= nil and self.race.running == true then
+            self.race:RemovePlayer(src)
         end
     end
-
 end
 
-function MatchList_Get()
+function CMatch:UpatePlayerlist( playerlist )
+    self.playerlist = playerlist
+end
 
-    local matchlist = nil
-    local cb = Callbacks:add_callback('matchlist_get_fns', function(ms)
-        matchlist = ms
-    end) 
 
-    sv_net_update('matchlist' , {'get'})
-    
-    while matchlist == nil do
-        Citizen.Wait(1)
+function CMatch:Start() -- called by server becasuse fuck you
+    for k , pl in ipairs(self.playerlist) do 
+        self.race:AddPlayer(pl.id)
+    end
+    self.race:NetStart()
+end
+
+function CMatch:NetHandle(keys , data)
+    local target = keys:pop()
+    if target == 'race' then
+        if self.race:NetHandle(keys,data) == false then
+            -- TODO error handling : some thing
+        end
+    elseif target == 'start' and self.shared == false then
+        self:Start()
+    elseif target == 'player' then
+        
+        if self:NetUpdatePlayer(keys , data) == false then 
+            -- TODO error handling
+        end
+    elseif target == 'update' then
+        local prop = keys:pop()
+        if prop == 'route' then
+            self:SetRoute(data.value)
+        elseif prop == 'name' then
+            self.name = data.value
+        elseif prop == 'use_finishline' then
+            self.route.use_finishline = data.value
+        elseif prop == 'max_players' then
+            self.max_players = data.value
+        elseif prop == 'max_laps' then
+            self.max_laps = data.value
+        elseif prop == 'host' then
+            self.host = data.value
+        else
+            -- TODO error handling : invalid prop
+        end
+    elseif target == 'playerlist' then
+
+        local action = keys:pop()
+        if action == 'add' then
+            self:AddPlayer(data.value)
+        elseif action == 'remove' then
+            self:RemovePlayer(data.value)
+        elseif action == 'update' then
+            self:UpatePlayerlist(data.value)
+        end
+    else
+        -- TODO error handling : invalid target
     end
 
-    return matchlist
 end
-
-Callbacks = {
-    matchrecv_fns = {},
-    matchplistup_fns = {},
-    matchleave_fns = {},
-    matchlist_get_fns = {}      
-}
-
-function Callbacks:add_callback(name , callback)
-    desk.insert_beg(self[name],callback)
-end
-
-function Callbacks:remove_callback(name , callback)
-    
-    if typeof (callback) == 'number' then
-        local fn , k = desk.find(self[name] , function(v) return v == callback end)
-        callback = k
-    end
-    
-    table.remove(self[name],callback)
-
-end
-
-function invoke_callback(name , args)
-    if Callbacks[name] == nil or #Callbacks[name] == 0 then return end
-    for k , v in pairs(Callbacks[name]) do
-        v(args)
-    end
-end
-
 
 Match = nil
 
 RegisterNetEvent('pd_race:cl_net_update')
-AddEventHandler('pd_race:cl_net_update' , function(target , keys , data)
-
-    if target == 'match' then
-        print('[match]', json.encode(keys) , json.encode(data))
-        if keys[1] == 'recv' then            
-            
-            if data.error == true then
-                invoke_callback('matchrecv_fns', data)
-                return
-            end
-
-            Match = CMatch:new(data.match)
-            Match:RaceInit()
-            Match.id = data.id
-
-            invoke_callback('matchrecv_fns',{ Match = Match})
-            
-        end
-        
-        if Match == nil then
-            return
-        end
-
-        if keys[1] == 'player' then
-
-            if Match:NetUpdatePlayer( { table.unpack(keys,2) } ,data) == false then
-                print('[match] can\'t update player #' .. src .. '(invalid player id ?)')
-            end
-
-        elseif keys[1] == 'playerlist' then
-            if keys[2] == 'update' then
-                Match.playerlist = data.playerlist
-            end
-
-        elseif keys[1] == 'removed' then -- kicked , leave 
-            Match = nil
-            invoke_callback('matchclear_fns' , {data.action , data.reason})
-        end
-
-    elseif target == 'matchlist' then
-        if keys[1] == 'recv' then
-            Matchlist = data.matchlist
-
-            for k , v in ipairs(Matchlist) do
-                print(string.format('#%d [%s] %s {%d/%d}',v.host,v.id,v.name,#v.playerlist,v.max_players))
-            end
-            invoke_callback('matchlist_get_fns',{Matchlist})
-        end
-    end
-
-end)
-
-
-
-RegisterCommand('m', function(source , args ,rawCommands)
-    local cmd = args[1]
-
-    if cmd == 'c' then
-        
-    elseif cmd == 'list' then
-        sv_net_update('matchlist' , {'get'})
-    elseif cmd == 'j' then
-        CMatch:NetJoin(args[2])
-    elseif cmd == 'l' then
-        CMatch:NetLeave(args[2])
-    elseif cmd == 'r' then
-        Match:SetReady(Match.ready)
-    elseif cmd == 's' then
-        Match:Start()
-    else
-        print('invalid cmd')
-    end
+AddEventHandler('pd_race:cl_net_update' , function(target , rawkeys , data)
+    print(target , json.encode(rawkeys) , data)
     
+    local keys = CKeys:new(rawkeys)
+    if target == 'match' and Match ~= nil then
+        if Match:NetHandle(keys,data) == false then
+            print('[Match:NetHandle(keys,data)]', target , json.encode(keys) , json.encode(data))
+        end
+    elseif target == 'matchlist' then
 
-end,false)
+        local action = keys:pop()
+        if action == 'recive' then
+
+            local prop = keys:pop()
+            if prop == 'match' then
+                Match = data.value
+            elseif prrop == 'matchlist' then
+                Matchlist = data.value
+            end
+        elseif action == 'removed' then
+            
+            Match:Clear()
+            Match = nil
+        end
+
+    end
+end)

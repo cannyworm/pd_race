@@ -13,7 +13,8 @@ client_scripts {
     'libs/lock.lua',
     'libs/misc.lua',
     'libs/desk.lua',
-    
+    'libs/keys.lua',
+
     'libs/client/fn_wrapper.lua',
     'client/cl_net_update.lua',
     'client/cl_scalforms.lua',
@@ -39,6 +40,7 @@ server_scripts {
     'libs/lock.lua',
     'libs/desk.lua',
     'libs/misc.lua',
+    'libs/keys.lua',
     
     'server/sv_net_update.lua',
     'server/sv_routes.lua',

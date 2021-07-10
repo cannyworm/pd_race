@@ -5,7 +5,7 @@ function is_float(num)
 end
 
 function scaleform:new(id , load_now)
-    o = {
+    local o =  {
         id = id,
         color = {
           r = 255,
@@ -13,11 +13,13 @@ function scaleform:new(id , load_now)
           b = 255,
           a = 255
         },
-        handle = nil
+        handle = nil,
+        rendering = false
     }
+
     
     if load_now == true then
-      o.handle = scaleform.load_scalform(o.id)
+        o.handle = scaleform.load_scalform(o.id)
     end
 
     setmetatable(o, self)
@@ -111,6 +113,7 @@ end
 function scaleform:unload()
     SetScaleformMovieAsNoLongerNeeded(self.handle)
 end
+
 
 -- Citizen.CreateThread(function()
 --     -- ShowMPMessage('test','TESTT',5000)

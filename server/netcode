@@ -1,0 +1,115 @@
+# Format #
+- Target
+  - key
+    - sender:reciver { arguments } : action
+Example : 
+Class Match netcode name. 
+Client will send data first key name to server. 
+With argument { value = name } then server send match name.
+
+- Match
+  - name
+    - c:s { value = name} : set match name
+    - s:c { value = name} : set match name
+
+Netcode
+
+
+
+- Match
+
+  - race
+     - player (done)
+       - checkpoint 
+         - s:c { id = player_id , value = player_checkpoint } : 
+            find player with id if not found return false
+            else update player with id 'id' checkpoint
+            
+       - laps
+         - s:c { id = player_id , value = laps } : same as checkpoint
+
+       - finish
+         - s:c { id = player_id , value = finish } : same as checkpoint
+            (server)
+            check if every player is finish 
+            then destroy thread and stuff
+            (client)
+            check if id is localplayer then
+            destroy thread and stuff
+        - ready
+            - c:s {} : tell server that you ready
+    
+    - init (done)
+      - s:c {race = race} : start initialize race class ( timer , scalform , stuff ) 
+          then send server ready data
+  - start 
+    - s:c {} : start race 
+      send all player initialize data then wait till everybody return ready
+
+
+    - countdown (done)
+      - s:c {max = max_countdown , value = current_countdown } : show count down in client side
+
+    - go (done)
+      - s:c {} : send when server countdown hit zero . server will start update chekcpoint
+
+  - start 
+    - c:s {} : set match status to starting
+        send all player initialize data then wait till everybody return ready
+
+  - update (done)
+    - route
+      - c:s {value = id} : get route by id then set Match route and Race route
+      - s:c {value = route} : set Match route and Race route by value object
+
+    - name
+      - c:s { value = name} : check if name is valid then set name.
+      - s:c { value = name} : set match name
+
+    - use_finishline
+      - c:s { value = use_finishline } : set use_finishline in race.
+      - s:c { value = use_finishline } : set use_finishline in race.
+
+    - max_players
+      - c:s { value = max_players } : set max_players in race.
+      - s:c { value = max_players } : set max_players in race.
+
+    - max_laps
+      - c:s { value = max_laps } : set max_laps in race.
+      - s:c { value = max_laps } : set max_laps in race.
+
+    - host
+      - c:s { value = player_id } : set host in race.
+      - s:c { value = player_id } : set host in race.
+
+  - leave (done)
+    - c:s {} : client is leaving the match
+        if race is running
+        call self.race:RemovePlaer(src)
+
+  - playerlist (c) # what if player join and leave at the same time ?
+    - add
+      - s:c { value = player , reason = reason} : insert player to match.playerlist
+    - remove
+      - s:c { value = player_id } : remove player from self.playerlist and call self.race:RemovePlayer
+    - update
+      - s:c { value = playerlist } : set self.playerlist to value.playerlist
+   
+- Matchlist
+  - get (done)
+    - c:s {} : client request Matchlist
+    - s:c {} : map Matchlist 
+        if there is password set to random string
+        else just nil
+  - create (done)
+    - c:s {name = name , password , max_player , max_laps , route }
+  - join (s)
+    - c:s {} : find match by this id 
+  - recive (done)
+    - match
+      - s:c { value = match , reason = reason } : client recive match (from create , join)
+    - matchlist
+      - s:c { value = matchlist } : client recive match (from create , join)
+
+- error
+  - s:c { msg = error_message , data = data}

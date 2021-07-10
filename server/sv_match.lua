@@ -1,9 +1,9 @@
-
--- add keys system to prevent id spoof
+local avc_str = 'access viowation # cw_get_pwayew_match( { mode = \'aes128\' , key = data.pwivate }).host ~= swc'
 -- add ready player to race playerlist 
 -- cleanup cl_race classes
 -- check if player in anymatch then return
 -- check for invalid id
+-- handle player leave between match
 
 local matches = {}
 local matches_lock = Locks:new()
@@ -17,7 +17,7 @@ function SMatch:new( host  , name , password , max_players ,  max_laps )
         name  = name,
         password  = password,
         route  = nil,
-        race = SRace:new(), -- SRace class
+        race = nil, -- SRace class
         max_laps = max_laps,
         ready = false,
         disconnected = false,
@@ -50,24 +50,33 @@ end
 
 function SMatch:SetRoute( route )
     self.route = route
-    self.race.route = route
 end
 
 function SMatch:SetId( id )
     self.id = id
-    self.race:SetId(id)
 end
 
 function SMatch:RaceInit( )
-    self.race.route = self.route
+    self.race = SRace:new()
     self.race:SetId(self.id)
+    self.race.route = self.route
     self.race.max_laps = self.max_laps
+
 end
 
-
+function SMatch:Clear()
+    if self.race ~= nil then
+        self.race:Clear()
+    end
+    matches[self.id] = nil
+end
 
 function SMatch:AddPlayer( player , err_callback)
-    
+
+    if player == nil then
+        print('SMatch:AddPlayer player is nil')
+        return false
+    end
     if #self.playerlist == self.maxplayer then 
         err_callback('this match is full')
         return false
@@ -93,13 +102,25 @@ function SMatch:AddPlayer( player , err_callback)
 
 end
 
-function SMatch:RemovePlayer( player )
+function SMatch:RemovePlayer( player , reason)
 
     local pl , k = desk.find( self.playerlist , function (v) return v.id == player end)
 
     if pl ~= nil then
+        
         table.remove(self.playerlist , k)
-        self:NetAllClientUpdate({'playerlist' , 'update'}, {playerlist = self.playerlist, action = 'remove'})
+
+        if self.race ~= nil and self.race.running == true then
+            self.race:RemovePlayer(src , { RemoveCar = true })
+        end
+
+        self:NetAllClientUpdate({'playerlist' , 'remove'}, {value = player, reason = reason})
+        cl_net_update(player,'matchlist' , {'removed'} , {reason = reason})
+
+        if #self.playerlist == 0 then
+            self:Clear()
+        end
+
     else 
         err_callback('player ' .. v.id .. ' isn\'t in this match')
         return false
@@ -130,26 +151,31 @@ function SMatch:NetUpdatePlayer( client , keys , data)
     if pl == nil then
         return false
     end
-
-    if keys[1] == 'ready' then
-        if data.ready == true then
-            pl.ready = true
-        else
-            pl.ready = false
-        end
+    local prop = keys:pop()
+    if prop == 'ready' then
+        pl.ready = data.ready == true
         self:NetAllClientUpdate({'player','ready'} , { id = client , ready = pl.ready})
     end
 
 end
 
-function SMatch:Start()
-    self.running = true
-    self.race.route = self.route
+function SMatch:Start(src)
+    local players = desk.map(self.playerlist,function(v)
+        if v.ready == false then
+            return nil
+        end
+        return v
+    end)
     
-    for k , pl in ipairs(self.playerlist) do
-        self.race:AddPlayer(pl.id)
+    if #players == 0 then
+        cl_net_error(src , string.format('not enough player to start a game'))
+        return
     end
 
+    self.running = true
+    
+    self:RaceInit()
+    self.race:AddPlayers(players)
     self.race:Start()
     
     Citizen.CreateThread(function()
@@ -161,41 +187,153 @@ function SMatch:Start()
                 
                 -- self:NetAllClientUpdate( {'cleanup'} )
                 -- matches[self.id] = nil
+                self.race = nil
                 self.running = false
             end
         end
     end)
+
+end
+
+function SMatch:NetHandle( src ,   keys , data)
+    local target = keys:pop()
+    if target == 'race' then
+        if self.race:NetHandle( src , keys , data) == false then 
+            -- TODO error handling
+        end
+    elseif target == 'player' then
+        if self:NetUpdatePlayer( src , keys , data) == false then 
+            -- TODO error handling
+        end
+    elseif target == 'start' then
+        if src ~= self.host then
+            cl_net_error(src , string.format('access viowation # cw_get_pwayew_match( { mode = \'aes128\' , key = data.pwivate }).host ~= swc'))
+            return 
+        end
+        if self.running == true then
+            cl_net_error(src , string.format('can\'t start already stated match'))
+            return
+        end
+        self:Start(src)
+    elseif target == 'leave' then
+        self:RemovePlayer(src)
+        if #self.playerlist == 0 then -- auto delete match when empty
+            self.race.stop = true
+            matches[self.id] = nil
+        end
+    elseif target == 'update' then
+        if src ~= self.host then
+            cl_net_error(src , string.format(avc_str))
+            return 
+        end
+        local prop = keys:pop()
+        if prop == 'route' then
+            TriggerEvent('sv_routes:sv_get_route', data.value , function(route)
+
+                if route == nil then
+                    -- TODO error handling : error route doesn't exits
+                    cl_net_error(src , string.format("can't find route \"%s\" ",data.value))
+                    return
+                end
+
+                self:SetRoute(route)
+                self:NetAllClientUpdate( {'update' , 'route'}  , {value = route})
+            end)
+        elseif prop == 'name' then
+            self.name = data.value
+            self:NetAllClientUpdate({'update' , 'name'} , {value = data.value})
+        elseif prop == 'use_finishline' then
+            self.route.use_finishline = data.value
+            self:NetAllClientUpdate({'update' , 'use_finishline'} , {value = data.value})
+        elseif prop == 'max_players' then
+            self.max_players = data.value
+            self:NetAllClientUpdate({'update' , 'max_players'} , {value = data.value})
+        elseif prop == 'max_laps' then
+            self.max_laps = data.value
+            self:NetAllClientUpdate({'update' , 'max_laps'} , {value = data.value})
+        elseif prop == 'host' then
+            self.host = data.value
+            self:NetAllClientUpdate({'update' , 'host'} , {value = data.value})
+        else
+            -- error handling
+        end
+    else 
+        -- TODO error handling : error target doesn't exits
+    end
 end
 
 
+function match_register( host , args , error_callback )
 
-function match_register( host , name , password , max_players , max_laps, id  , err_callback )
+    if args.max_players == nil then
+        error_callback('args.max_players is nil' )
+        return nil
+    end
+
+    if args.max_laps == nil then
+        error_callback( 'args.max_laps is nil' )
+        return nil
+    end
+
+    if args.name == nil then
+        error_callback('args.name is nil' )
+        return nil
+    end
+
+    -- TODO check if name is invalid
 
     while matches_lock:__is_lock() == true do
         Citizen.Wait(500)
     end
     
-    id = id or rnd_string(3)
+    id = tostring(math.random(100,999))
     
     matches_lock:__lock()
     
     
     if matches[id] ~= nil then
-        err_callback("This matches id (" .. id .. ") already exits")
+        error_callback("This matches id (" .. id .. ") already exits")
         return nil
     end
 
-    local match = SMatch:new(host , name , password ,  max_players , max_laps)
+    local match = SMatch:new(host , args.name , args.password ,  args.max_players , args.max_laps)
     match:AddPlayer(host , print)
     
     matches[id] = match
     
     match:SetId(id)
+
+    local stop_waiting = false
+  
+    TriggerEvent('sv_routes:sv_get_route', args.route_id , function(_route)
+        
+        match:SetRoute(_route)
+        stop_waiting = true
+    end)
+
+
+    Citizen.SetTimeout(1000 * 20, function()
+        if stop_waiting == true then return end
+        stop_waiting = true
+        print('[error] server take to long to response (20 secound) { \'' .. args.route_id .. '\'}')
+        error_callback( 'server take to long to response (20 secound) { \'' .. args.route_id .. '\'}')
+        
+    end)
+
+    while stop_waiting == false do
+        Citizen.Wait(1)
+    end
+
+    if match.route == nil then
+        error_callback('route \'' .. args.route .. '\' doesn\' exits' )
+        return nil 
+    end
+
     match:RaceInit()
 
     matches_lock:__unlock()
     
-    return id , match
+    return match
 
 end
 
@@ -211,113 +349,65 @@ function get_player_match(source)
 end
 
 RegisterNetEvent('pd_race:sv_net_update')
-AddEventHandler('pd_race:sv_net_update' , function(target , keys , data)
-    print('['..target..']', json.encode(keys) , json.encode(data))
-    
+AddEventHandler('pd_race:sv_net_update' , function(target , rawkeys , data)
+    -- { match_id , ... }
+
+    print(target , json.encode(rawkeys) , json.encode(data))
+
     local src = source
-    if target == 'match' and matches[keys[1]] ~= nil then
-
-        local match = matches[keys[1]]
-        
-        if keys[2] == 'race' then
-            if match.race:net_update(src , { table.unpack(keys,3) } , data) == false then
-                print('[race] can\'t update player #' .. src .. '(invalid player/match id ?)')
+    local keys = CKeys:new(rawkeys)
+    if target == 'match' then
+        local match = matches[keys:pop()]
+        if match ~= nil then
+            if match:NetHandle(source,keys,data) == false then
+                cl_net_error(src , 'action invalid')
             end
-
-        elseif keys[2] == 'player' then -- update specify player
-
-            if match:NetUpdatePlayer(src , { table.unpack(keys,3) } ,data) == false then
-                print('[match] can\'t update player #' .. src .. '(invalid player/match id ?)')
-            end
-        
-        elseif keys[2] == 'update' then
-
-            if src ~= match.host then
-                return
-            end
-
-            if keys[3] == 'name' then
-            elseif keys[3] == 'route' then
-            elseif keys[3] == 'passwaord' then
-            end
-
-        elseif keys[2] == 'start' then
-            if src == match.host then
-                match:Start()
-            end
+        else
+            cl_net_error(src , 'match invalid')
         end
-
     elseif target == 'matchlist' then
-        
-        if keys[1] == 'get' then
-            cl_net_update(src , 'matchlist'  , {'recv'} ,{
-                matchlist = desk.map(matches , function(v)
-                    local hax = json.decode(json.encode(v))
-                    if hax.password ~= nil then
-                        hax.password = GetPasswordHash('dick')
-                    end
-                    return hax
-                end)
-            })
-
-        elseif keys[1] == 'create' then
-            
-            if get_player_match(src) ~= nil then
-                print(string.format("[match] can't create match #%d already in one" , src))
-                SMatch:NetClientUpdate(src, {'recv'} , { error = true , reason = string.format('cam\'t create match when  already in one') })
-                return
-            end
-
-            TriggerEvent('sv_routes:sv_get_route', data.route_id , function(route)
-
-                if route == nil then
-                    SMatch:NetClientUpdate(src, {'recv'} , { error = true , reason = string.format('route id %s didn\'t exits',data.route_id) })
-                    return
+        local action = keys:pop()
+        if action == 'get' then
+            local mlist = desk.map(matches , function(v , k) 
+                local m = desk.pcopy(v)
+                
+                if m.password ~= nil then
+                    m.password = '123456789'
                 end
-                if data.max_players > #route.cars then
-                    SMatch:NetClientUpdate(src, {'recv'} ,{ error = true , reason = string.format('route max cars is %d',#route.cars) } )
-                    return
-                end
-                local id , match = match_register(src , data.name , data.password , data.max_players,data.max_laps,data.custom_id,print)
-                match:SetRoute(route)
-                if match.race:SetUseFinishline(data.use_finishline)  == false then
-                    SMatch:NetClientUpdate(src, {'recv'} ,{ error = true , reason = string.format('this route doenn\'t have finishline ') } )
-                    return
-                end
-                SMatch:NetClientUpdate(src, {'recv'} , {match = match , id = id})
+
+                return m
             end)
-
-        elseif keys[1] == 'join' then
-
-            if get_player_match(src) ~= nil then
-                print(string.format("[match] can't join match #%d already in one" , src))
-                SMatch:NetClientUpdate(src, {'recv'} , { error = true , reason = string.format('can\'t join match when  already in one') })
-                return
+            cl_net_update( src, 'matchlist' , {'recive' ,  'matchlist'} , { value = mlist })
+        elseif action == 'create' then
+            local m = match_register(src , data , function(error_msg)
+                cl_net_error(src , string.format("Can't create match because %s",error_msg))
+            end)
+            m.race:SetUseFinishline(data.use_finishline == true)
+            if m ~= nil then
+                cl_net_update(src , 'matchlist' , {'recive' , 'match'} , {value = m})
             end
-
-            local match = matches[data.id]
-            if match ~= nil then -- if match exits
-                if match.password == nil or match.password == data.password then 
-                    if match:AddPlayer(src,print) == true then
-                        SMatch:NetClientUpdate(src, {'recv'} , {match = match , id = data.id})                  
-                        return
-                    else
-                        SMatch:NetClientUpdate(src, {'recv'} , { error = true , reason = string.format('match is full') })
-                    end
-                else
-                    SMatch:NetClientUpdate(src, {'recv'} , { error = true , reason = string.format('invalid password') })
+        elseif action == 'join' then
+            local id = data.id
+            local match = matches[id]
+            if match ~= nil then
+                if match:AddPlayer(src,function(error_msg)
+                    cl_net_error(src , string.format("Can't join match because %s",error_msg))
+                end) == false then
+                    
                 end
+            else
+                cl_net_error(src , string.format('match %s doesn\'t exits',id))
             end
-        elseif keys[1] == 'leave' then
+        elseif action == 'leave' then
             local match = get_player_match(src)
             if match ~= nil then
-                match:RemovePlayer(src,print)
-                cl_net_update(src , 'match' , {'removed'} , {action = 'leave' , reason = 'leave match'})
-                if #match.playerlist == 0 then -- auto delete match when empty
-                    matches[match.id] = nil
-                end
-                return
+                match:RemovePlayer(src , 'leaved')
+            else
+                cl_net_error(src , string.format('you aren\'t in any match'))
             end
+        else
+
         end
     end
+    -- get match , call NetHandle
 end)

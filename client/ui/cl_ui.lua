@@ -1,4 +1,5 @@
 
+-- finish MatchConfig
 
 --[[
 
@@ -19,19 +20,21 @@
 local MainMenu = RageUI.CreateMenu("Match Menu", "Race");
 local CreateMatchMenu = RageUI.CreateSubMenu(MainMenu,"Create Match", "Race");
 local MatchListMenu = RageUI.CreateSubMenu(MainMenu,"Match List", "Race");
+local MatchConfig = RageUI.CreateSubMenu(MainMenu,"Match Config", "Race");
+
 
 local MatchData = {
     name = 'race match',
     route_id = 'test3' ,
     id = 'race1',
-    max_players = 5,
+    max_players = 2,
     max_laps = 1,
 }
-
+local ServerId = 0
 function RageUI.PoolMenus:Main()
     MainMenu:IsVisible(function(Items)
-
-        if Match == nil then -- if player didn't in any match
+        -- _match == nil
+        if _match == nil then -- if player didn't in any match
             Items:AddButton("Create Match", "", { IsDisabled = false }, function(onSelected)    
             end, CreateMatchMenu)
             Items:AddButton("Join Match", " via id", { IsDisabled = false }, function(onSelected)    
@@ -45,16 +48,20 @@ function RageUI.PoolMenus:Main()
 
         else
             Items:AddSeparator("Match Info")
-            Items:AddButton("Name : " .. Match.name , "",  { IsDisabled = false } , function(onSelected)  end)
-            Items:AddButton("Id : " .. Match.id, "", { IsDisabled = false } , function(onSelected)  end)
-            Items:AddButton("Route : " .. Match.route.id,"",  { IsDisabled = false } , function(onSelected)  end)
+            Items:AddButton("Name : " .. _match.name , "",  { IsDisabled = false } , function(onSelected)  end)
+            Items:AddButton("Id : " .. _match.id, "", { IsDisabled = false } , function(onSelected)  end)
+            Items:AddButton("Route : " .. _match.route.id,"",  { IsDisabled = false } , function(onSelected) end)
+            
+            Items:AddButton("Config","", { IsDisabled = false } , function(onSelected)  end, MatchConfig)
+      
+
             -- Items:AddButton("Max Laps : " .. Match.max_laps, "", { IsDisabled = false } , function(onSelected)  end)
 
             Items:AddSeparator("PlayerList")
             
-            for k , v in pairs(Match.playerlist) do
+            for k , v in pairs(_match.playerlist) do
                 local pl = GetPlayerFromServerId(v.id)
-                if v.id ~= GetPlayerServerId(GetPlayerIndex()) then
+                --if v.id ~= ServerId then
                     local name = GetPlayerName(pl)
                     if v.ready == true then
                         name = '~g~' .. name
@@ -62,31 +69,71 @@ function RageUI.PoolMenus:Main()
                         name = '~r~' .. name
                     end
                     Items:CheckBox(name, "", v.ready, {} , function()end)
-                end
+                --end
                     
             end
 
             Items:AddSeparator("Option")
-            Items:CheckBox("Ready", "", Match.ready , {} ,function(onSelected, IsChecked)
+            Items:CheckBox("Ready", "", _match.ready , {} ,function(onSelected, IsChecked)
                 if onSelected  then
-                    Match:SetReady(IsChecked)
+                    _match:NetSetReady(IsChecked)
                 end
             end)
 
-            Items:AddButton("~g~Start", "",  { IsDisabled = false } , function(onSelected) 
-                if onSelected then 
-                    Match:Start()
-                end
-             end)
+            if _match.host == ServerId then
+                Items:AddButton("~g~Start", "",  { IsDisabled = false } , function(onSelected) 
+                    if onSelected then 
+                        _match:NetStart()
+                    end
+                end)
+            end
+
             Items:AddButton("~r~~h~Leave", "",  { IsDisabled = false } , function(onSelected) 
                 if onSelected then 
-                    Match:NetLeave()
+                    _match:NetLeave()
                 end
             end)
             
         end
     end , function(Items) end)
 
+
+    MatchConfig:IsVisible(function(Items)
+        Items:AddButton("Id : " .. _match.id, "", { IsDisabled = true } , function(onSelected)  end)
+        Items:AddButton("Name : " .. _match.name , "",  { IsDisabled = false } , function(onSelected)  
+            if onSelected then
+                if _match.host == ServerId then 
+
+                    local result = GetUserInput("Match Name")
+                    if result ~= nil then
+                        _match:NetSetName(result)
+                    end
+
+                end
+            end
+        end)
+
+        
+        Items:AddButton("Route : " .. _match.route.id ,"",  { IsDisabled = false } , function(onSelected) 
+            if onSelected then
+                if _match.host == ServerId then 
+                
+                    local result = GetUserInput("Match Route")
+                    if result ~= nil then
+                        _match:NetSetRouteById(result)
+                    end
+
+                end
+            end
+        end)
+
+        Items:CheckBox("User Fninishline", "if set to false will use first checkpoint as finishline", MatchData.use_finishline , {} ,function(onSelected, IsChecked)
+            if onSelected  then
+                _match:NetSetUseFinishline(IsChecked)
+            end
+        end)
+
+    end,function() end)
 
     CreateMatchMenu:IsVisible(function(Items)
         Items:AddButton("Set Name", "current match name : \"" .. MatchData.name .. '"', { IsDisabled = false }, function(onSelected) 
@@ -105,15 +152,6 @@ function RageUI.PoolMenus:Main()
                 end
             end
         end)
-        Items:AddButton("Set Id", "current match Id : \"" .. MatchData.id .. '"', { IsDisabled = false }, function(onSelected) 
-            if onSelected then
-                local result = GetUserInput("Match Id")
-                if result ~= nil then
-                    MatchData.id = result
-                end
-            end
-        end)
-
         Items:AddList("Set Max Player", { 1, 2, 3 , 4 , 5 }, MatchData.max_players, "current match max player : " .. MatchData.max_players, { IsDisabled = false }, function(Index, onSelected, onListChange)
 			if (onListChange) then
 				MatchData.max_players = Index;
@@ -135,34 +173,30 @@ function RageUI.PoolMenus:Main()
         Items:AddButton("Create", 
             string.format( 
                 'Name : %s \n'
-                .. 'Id : %s \n'
                 .. 'Route : %s \n'
                 .. 'Max Players : %d \n'
                 .. 'Max Laps : %d '
-             , MatchData.name  , MatchData.id , MatchData.route_id , MatchData.max_players ,  MatchData.max_laps) , { IsDisabled = false }, function(onSelected) 
+             , MatchData.name   , MatchData.route_id , MatchData.max_players ,  MatchData.max_laps) , { IsDisabled = false }, function(onSelected) 
             if onSelected then
-                CMatch:NetCreate(MatchData.id , MatchData.name , MatchData.password , MatchData.route_id , MatchData.use_finishline, MatchData.max_players , MatchData.max_laps)
+                CMatch:NetCreate( MatchData.name , MatchData.password , MatchData.route_id , MatchData.use_finishline, MatchData.max_players , MatchData.max_laps)
                 RageUI.GoBack()
             end
         end)
-
-        
-
 
 
     end , function(Items) end)
 
 
     MatchListMenu:IsVisible(function(Items)
-        for k ,v in pairs(Matchlist) do
+        for k ,v in pairs(_matchlist) do
             Items:AddButton(v.name, v.id , { IsDisabled = (v.password ~= nil) }, function(onSelected) 
                 if onSelected then
                     CMatch:NetJoin(v.id)
+                    RageUI.GoBack()
                 end
             end)
         end
     end)
-
 
 end
 
@@ -172,9 +206,36 @@ Keys.Register("E", "E", "Test", function()
 end)
 
 Citizen.CreateThread(function()
-    Callbacks:add_callback( 'matchrecv_fns' , function(match)
-        if match.error == true then
-            ShowNotification('~r~ Error ~w~: ' .. match.reason)
+    ServerId = GetPlayerServerId(GetPlayerIndex())
+end)
+
+_match  = nil
+_matchlist = {}
+
+AddEventHandler('pd_race:cl_net_update' , function(target , rawkeys , data)
+    if target == 'error' then
+        ShowNotification(string.format('~y~Error~w~: %s', data.msg or 'nil'))
+        print('error : ',json.encode(rawkeys.keys),json.encode(data))
+        return
+    end
+    local keys = CKeys:new(rawkeys)
+    if target == 'match' and _match ~= nil then
+        if _match:NetHandle(keys,data) == false then
+            print('[Match:NetHandle(keys,data)]', target , json.encode(rawkeys) , json.encode(data))
         end
-    end)
+    elseif target == 'matchlist' then
+        local action = keys:pop()
+        if action == 'recive' then
+
+            local prop = keys:pop()
+            if prop == 'match' then
+                _match = CMatch:new(data.value,true)
+            elseif prop == 'matchlist' then
+                _matchlist = data.value
+            end
+        elseif action == 'removed' then
+            _match = nil 
+            ShowNotification(string.format('~y~Removed from match ~w~: %s',data.reason or 'nil'))
+        end
+    end
 end)

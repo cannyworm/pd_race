@@ -38,16 +38,46 @@ end
 
 desk.insert = function(_table , pos , v )
     table.insert(_table,pos,v)
-    return pos , _table[pos]
+    return  _table[pos] , pos
 end
 
 desk.insert_beg = function ( _table , v)
-    return 1 , _table[desk.insert(_table,1,v)]
+    return desk.insert(_table,1,v)
 end
 
 desk.insert_end = function ( _table  , v)
     local pos = #_table + 1
-    return pos , _table[desk.insert(_table,pos,v)]
+    return desk.insert(_table,pos,v)
 end
 
+desk.remove = function(_table , pos , v )
+    table.remove(_table,pos)
+    return pos
+end
+
+desk.remove_beg = function ( _table , v)
+    return desk.remove(_table,1)
+end
+
+desk.remove_end = function ( _table  , v)
+    return desk.remove(_table,#_table + 1)
+end
+
+desk.jcopy = function( _table )
+    return json.decode(json.encode(table))
+end
+
+desk.icopy = function ( _table )
+    return { table.unpack(_table) }
+end
+
+desk.pcopy = function( _table )
+    local t = {}
+    
+    for k , v in pairs(_table) do
+        t[k] = v
+    end
+
+    return t
+end
 
