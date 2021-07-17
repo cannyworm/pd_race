@@ -77,23 +77,25 @@ function SMatch:AddPlayer( player , err_callback)
         print('SMatch:AddPlayer player is nil')
         return false
     end
-    if #self.playerlist == self.maxplayer then 
+
+    if #self.playerlist == self.max_players then 
         err_callback('this match is full')
         return false
     end
 
-    local pl = desk.find( self.playerlist , function (v) return v.pl == player end )
+    local pl = desk.find( self.playerlist , function (v) return v.id == player end )
 
     if pl == nil then
         table.insert(self.playerlist, {
             id = player,
+            ent = GetPlayerPed(player),
             ready = false
         })
 
-        self:NetAllClientUpdate({'playerlist' , 'update'}, { playerlist = self.playerlist , action = 'add' })
+        self:NetAllClientUpdate({'playerlist' , 'update'}, { value = self.playerlist , action = 'add' })
 
     else 
-        err_callback('player ' .. v.id .. ' already joined this match')
+        err_callback('player ' .. player .. ' already joined this match')
         return false
     end
     
@@ -153,6 +155,12 @@ function SMatch:NetUpdatePlayer( client , keys , data)
     end
     local prop = keys:pop()
     if prop == 'ready' then
+        local veh = GetVehiclePedIsIn(pl.ent,false)
+        
+        if veh == nil then
+            cl_net_error(client , 'you need to be inside vehicle to ready')
+        end
+
         pl.ready = data.ready == true
         self:NetAllClientUpdate({'player','ready'} , { id = client , ready = pl.ready})
     end
@@ -411,3 +419,19 @@ AddEventHandler('pd_race:sv_net_update' , function(target , rawkeys , data)
     end
     -- get match , call NetHandle
 end)
+
+RegisterCommand('debug_join', function(source , args , rawcommand)
+    local id = args[2]
+    local match = matches[id]
+    if match ~= nil then
+        if match:AddPlayer(args[1],function(error_msg)
+            print(string.format("Can't join match because %s",error_msg))
+
+        end) == false then
+            
+        end
+    else
+        print(string.format('match %s doesn\'t exits',id))
+    end
+
+end, true)
